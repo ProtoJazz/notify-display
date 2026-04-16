@@ -2,7 +2,7 @@ from machine import Pin, SPI
 import time
 import framebuf
 import writer
-import font24
+import font32 as font24
 import font20
 import font14
 
@@ -14,12 +14,6 @@ class Display(framebuf.FrameBuffer):
         self.width = width
         self.height = height
         super().__init__(buf, width, height, framebuf.MONO_HLSB)
-    
-    def pixel(self, x, y, color):
-        self._fb.pixel(x, y, color)
-    
-    def fill_rect(self, x, y, w, h, color):
-        self._fb.fill_rect(x, y, w, h, color)
 
 # Pin numbers match the Seeed breakout board wiring
 RST  = Pin(2,  Pin.OUT)
@@ -27,7 +21,7 @@ CS   = Pin(3,  Pin.OUT)
 DC   = Pin(5,  Pin.OUT)
 BUSY = Pin(7,  Pin.IN)
 
-spi = SPI(1, baudrate=2000000, polarity=0, phase=0,
+spi = SPI(1, baudrate=4_000_000, polarity=0, phase=0,
           sck=Pin(8), mosi=Pin(10), miso=Pin(9))
 
 def send_command(cmd):
@@ -61,33 +55,48 @@ def init():
     send_command(0x12)  # software reset
     wait_busy()
 
-    send_command(0x01)  # gate setting (display height)
-    send_data(0x27)     # 295 = 296 lines - 1
-    send_data(0x01)
+    send_command(0x74)  # analog block control
+    send_data(0x54)
+
+    send_command(0x7E)  # digital block control
+    send_data(0x3B)
+
+    send_command(0x0C)  # soft start
+    send_data(0x8E)
+    send_data(0x8C)
+    send_data(0x85)
+    send_data(0x3F)
+
+    send_command(0x2B)  # ACVCOM
+    send_data(0x04)
+    send_data(0x63)
+
+    send_command(0x01)  # driver output control: 299 = 300 gates - 1
+    send_data(0x2B)     # low byte
+    send_data(0x01)     # high byte
     send_data(0x00)
 
-    send_command(0x11)  # data entry mode
-    send_data(0x03)     # x increment, y increment, update in x direction
+    send_command(0x3A)  # dummy line period
+    send_data(0x2C)
 
-    send_command(0x44)  # set RAM x address range
-    send_data(0x00)     # start: 0
-    send_data(0x0F)     # end: 15 (16 bytes * 8 bits = 128 pixels)
-
-    send_command(0x45)  # set RAM y address range
-    send_data(0x00)     # start: 0
-    send_data(0x00)
-    send_data(0x27)     # end: 295 (low byte)
-    send_data(0x01)     # end: 295 (high byte)
+    send_command(0x3B)  # gate line width
+    send_data(0x0A)
 
     send_command(0x3C)  # border waveform
     send_data(0x05)
 
-    send_command(0x21)  # display update control
-    send_data(0x00)
-    send_data(0x80)
+    send_command(0x11)  # data entry mode: x increment, y increment
+    send_data(0x03)
 
-    send_command(0x18)  # use built-in temperature sensor
-    send_data(0x80)
+    send_command(0x44)  # set RAM x address range: 0 to 49 (50 bytes = 400px)
+    send_data(0x00)
+    send_data(0x31)
+
+    send_command(0x45)  # set RAM y address range: 0 to 299
+    send_data(0x00)
+    send_data(0x00)
+    send_data(0x2B)     # low byte
+    send_data(0x01)     # high byte
 
     send_command(0x4E)  # set RAM x address counter to 0
     send_data(0x00)
@@ -114,7 +123,7 @@ def write_previous_image(buf):
 
 def refresh_partial():
     send_command(0x22)
-    send_data(0xC7)     # partial: no LUT reload, display Mode 1
+    send_data(0xC7)     # partial refresh
     send_command(0x20)
     wait_busy()
 
@@ -125,46 +134,26 @@ def refresh():
     wait_busy()
 
 def print_word(word):
-    # Source: landscape framebuffer (296 wide x 128 tall)
-    # 296px / 8 = 37 bytes per row
-    src_buf = bytearray(37 * 128)
-    src_buf[:] = b'\xff' * len(src_buf)
-    display = Display(src_buf, 296, 128)
+    buf = bytearray(b'\xff' * 15000)
+
+    display = Display(buf, 400, 300)
 
     wri = writer.Writer(display, font24, verbose=False)
     writer.Writer.set_textpos(display, 10, 10)
     wri.printstring(word, invert=True)
-
-    # Destination: portrait buffer (128 wide x 296 tall)
-    # 128px / 8 = 16 bytes per row; 16 * 296 = 4736 bytes
-    dst_buf = bytearray(b'\xff' * 4736)
-
-    # Rotate 90 degrees clockwise into portrait buffer
-    for y in range(128):
-        for x in range(296):
-            src_byte = (y * 37) + (x // 8)
-            src_bit = 7 - (x % 8)
-            pixel = (src_buf[src_byte] >> src_bit) & 1
-            dst_x = 127 - y
-            dst_y = x
-            dst_byte = (dst_y * 16) + (dst_x // 8)
-            dst_bit = 7 - (dst_x % 8)
-            if pixel == 0:
-                dst_buf[dst_byte] &= ~(1 << dst_bit)
-
     init()
-    write_image(dst_buf)
+    write_previous_image(buf) 
+    write_image(buf)
     refresh()
     print("done")
 
 def render_screen(event_name, event_time, event_countdown, notif_app, notif_text):
     global _prev_buf, _partial_count
 
-    # Source: landscape framebuffer (296 wide x 128 tall)
-    # 296px / 8 = 37 bytes per row
-    src_buf = bytearray(37 * 128)
-    src_buf[:] = b'\xff' * len(src_buf)
-    display = Display(src_buf, 296, 128)
+    # Native landscape framebuffer: 400 wide x 300 tall
+    # 400px / 8 = 50 bytes per row; 50 * 300 = 15000 bytes
+    buf = bytearray(b'\xff' * 15000)
+    display = Display(buf, 300, 400)
 
     # -- Calendar section --
     wri_big = writer.Writer(display, font20, verbose=False)
@@ -175,15 +164,15 @@ def render_screen(event_name, event_time, event_countdown, notif_app, notif_text
     time_line = event_time
     if event_countdown:
         time_line = event_time + "  " + event_countdown
-    writer.Writer.set_textpos(display, 37, 4)
+    writer.Writer.set_textpos(display, 50, 4)
     wri_sm.printstring(truncate(time_line, 23), invert=True)
 
     # -- Divider line --
     y_div = 56
-    for x in range(4, 294):
-        byte_idx = (y_div * 37) + (x // 8)
+    for x in range(4, 399):
+        byte_idx = (y_div * 50) + (x // 8)
         bit_idx = 7 - (x % 8)
-        src_buf[byte_idx] &= ~(1 << bit_idx)
+        buf[byte_idx] &= ~(1 << bit_idx)
 
     # -- Notification section --
     if notif_app:
@@ -194,37 +183,21 @@ def render_screen(event_name, event_time, event_countdown, notif_app, notif_text
         writer.Writer.set_textpos(display, y_div + 34, 4)
         wri_sm.printstring(truncate(notif_text, 23), invert=True)
 
-    # Rotate 90 degrees clockwise into portrait buffer
-    dst_buf = bytearray(b'\xff' * 4736)
-    for y in range(128):
-        for x in range(296):
-            src_byte = (y * 37) + (x // 8)
-            src_bit = 7 - (x % 8)
-            pixel = (src_buf[src_byte] >> src_bit) & 1
-            dst_x = 127 - y
-            dst_y = x
-            dst_byte = (dst_y * 16) + (dst_x // 8)
-            dst_bit = 7 - (dst_x % 8)
-            if pixel == 0:
-                dst_buf[dst_byte] &= ~(1 << dst_bit)
-
-    write_image(dst_buf)
+    write_image(buf)
 
     if _prev_buf:
         write_previous_image(_prev_buf)
     else:
-        write_previous_image(dst_buf)
+        write_previous_image(buf)
 
     if _prev_buf is None or _partial_count >= 5:
-        # Full refresh — clean slate
         _partial_count = 0
         refresh()
     else:
-        # Partial refresh — no flicker
         _partial_count += 1
         refresh_partial()
 
-    _prev_buf = bytearray(dst_buf)
+    _prev_buf = bytearray(buf)
 
 
 def truncate(text, max_chars):
