@@ -2,7 +2,6 @@ import config
 import json
 import socket
 
-# -- Display setup --
 if config.DISPLAY == "ssd1680":
     from ssd1680 import SSD1680
     import font20
@@ -28,7 +27,13 @@ else:
     import boot
 
     ip = boot.wlan.ifconfig()[0]
-    display.print_word(f"Waiting...\n{ip}")
+    display.render_screen(
+        "Waiting....",
+        "",
+        "",
+        "IP Address",
+        f"{ip}"
+    )
 
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
