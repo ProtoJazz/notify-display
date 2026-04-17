@@ -1,62 +1,75 @@
-import socket
-import ssd1680
+import config
 import json
+import socket
 
-# s = socket.socket()
-# s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-# s.bind(('0.0.0.0', 80))
-# s.listen(1)
+# -- Display setup --
+if config.DISPLAY == "ssd1680":
+    from ssd1680 import SSD1680
+    import font20
+    import font14
+    display = SSD1680(font_large=font20, font_small=font14)
+elif config.DISPLAY == "ssd1683":
+    from ssd1683 import SSD1683
+    import font32
+    import font20
+    display = SSD1683(font_large=font32, font_small=font20)
 
+display.init()
 
-print("Listening on port 80...")
-ssd1680.init()
-ssd1680.print_word("Waiting....")
-previous_parse = None
+if config.TEST_MODE:
+    display.render_screen(
+        "Union Meeting",
+        "14:00-15:30",
+        "in 2h30m",
+        "Slack",
+        "Dental plan! Lisa needs braces"
+    )
+else:
+    import boot
 
-# while True:
-#     conn, addr = s.accept()
-#     print("Connection from", addr)
-#     content_length = 1024
-#     data = conn.recv(content_length)
+    ip = boot.wlan.ifconfig()[0]
+    display.print_word(f"Waiting...\n{ip}")
 
-#     data_string = data.decode()
-#     print(data_string)
-#     parts = data_string.split("\r\n\r\n")
-#     body = parts[1]
-#     headers = parts[0]
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('0.0.0.0', 80))
+    s.listen(1)
 
-#     for line in headers.split("\r\n"):
-#         if line.startswith("content-length:"):
-#             content_length = int(line.split(":")[1].strip())
-#             print("We got content length!")
-#             print(content_length)
-    
-#     if content_length <= len(body):
-#         print("Raw body:", repr(body))
-#         print("all g")
-#     else:
-#         print("We pooped!")
-#         while len(body) < content_length:
-#             more = conn.recv(content_length - len(body))
-#             print("Raw body:", repr(more))
+    print(f"Listening on {ip}:80")
+    previous_parse = None
 
-#             new_body = more.decode()
-#             print(new_body)
-#             body += new_body
-    
-#     parsed = json.loads(body)
-#     print(parsed)
-#     conn.send('HTTP/1.1 200 OK\r\n\r\nOK')
-#     conn.close()
+    while True:
+        conn, addr = s.accept()
+        print("Connection from", addr)
+        content_length = 1024
+        data = conn.recv(content_length)
 
-#     if previous_parse is not None and previous_parse == parsed:
-#         print("No update")
-#     else:
-#         previous_parse = parsed
-#         ssd1680.render_screen(
-#             parsed.get("event_name", ""),
-#             parsed.get("event_time", ""),
-#             parsed.get("event_countdown", ""),
-#             parsed.get("notif_app", ""),
-#             parsed.get("notif_text", ""),
-#         )
+        data_string = data.decode()
+        parts = data_string.split("\r\n\r\n")
+        body = parts[1]
+        headers = parts[0]
+
+        for line in headers.split("\r\n"):
+            if line.startswith("content-length:"):
+                content_length = int(line.split(":")[1].strip())
+
+        while len(body) < content_length:
+            more = conn.recv(content_length - len(body))
+            body += more.decode()
+
+        parsed = json.loads(body)
+        print(parsed)
+        conn.send('HTTP/1.1 200 OK\r\n\r\nOK')
+        conn.close()
+
+        if previous_parse is not None and previous_parse == parsed:
+            print("No update")
+        else:
+            previous_parse = parsed
+            display.render_screen(
+                parsed.get("event_name", ""),
+                parsed.get("event_time", ""),
+                parsed.get("event_countdown", ""),
+                parsed.get("notif_app", ""),
+                parsed.get("notif_text", ""),
+            )

@@ -2,19 +2,19 @@ from machine import Pin, SPI
 from base_display import BaseDisplay, DisplayBuffer
 import writer
 
-class SSD1680(BaseDisplay):
-    def __init__(self, font_large, font_small, width=250, height=122, rotate=True):
+class SSD1683(BaseDisplay):
+    def __init__(self, font_large, font_small, width=400, height=300):
         self.rst = Pin(2, Pin.OUT)
         self.cs = Pin(3, Pin.OUT)
         self.dc = Pin(5, Pin.OUT)
         self.busy = Pin(7, Pin.IN)
-        self.spi = SPI(1, baudrate=2000000, polarity=0, phase=0,
+        self.spi = SPI(1, baudrate=4000000, polarity=0, phase=0,
                        sck=Pin(8), mosi=Pin(10), miso=Pin(9))
 
         bytes_per_row = (width + 7) // 8
         buf_size = bytes_per_row * height
 
-        super().__init__(width, height, buf_size, bytes_per_row, font_large, font_small, rotate)
+        super().__init__(width, height, buf_size, bytes_per_row, font_large, font_small, rotate=False)
 
     def init(self):
         self.reset()
@@ -22,47 +22,61 @@ class SSD1680(BaseDisplay):
         self.send_command(0x12)
         self.wait_busy()
 
-        self.send_command(0x01)
+        self.send_command(0x74)  # analog block control
+        self.send_data(0x54)
+
+        self.send_command(0x7E)  # digital block control
+        self.send_data(0x3B)
+
+        self.send_command(0x0C)  # soft start
+        self.send_data(0x8E)
+        self.send_data(0x8C)
+        self.send_data(0x85)
+        self.send_data(0x3F)
+
+        self.send_command(0x2B)  # ACVCOM
+        self.send_data(0x04)
+        self.send_data(0x63)
+
+        self.send_command(0x01)  # driver output control
         self.send_data((self.height - 1) & 0xFF)
         self.send_data((self.height - 1) >> 8)
         self.send_data(0x00)
 
-        self.send_command(0x11)
+        self.send_command(0x3A)  # dummy line period
+        self.send_data(0x2C)
+
+        self.send_command(0x3B)  # gate line width
+        self.send_data(0x0A)
+
+        self.send_command(0x3C)  # border waveform
+        self.send_data(0x05)
+
+        self.send_command(0x11)  # data entry mode
         self.send_data(0x03)
 
-        self.send_command(0x44)
+        self.send_command(0x44)  # set RAM x address range
         self.send_data(0x00)
         self.send_data(self.bytes_per_row - 1)
 
-        self.send_command(0x45)
+        self.send_command(0x45)  # set RAM y address range
         self.send_data(0x00)
         self.send_data(0x00)
         self.send_data((self.height - 1) & 0xFF)
         self.send_data((self.height - 1) >> 8)
 
-        self.send_command(0x3C)
-        self.send_data(0x05)
-
-        self.send_command(0x21)
-        self.send_data(0x00)
-        self.send_data(0x80)
-
-        self.send_command(0x18)
-        self.send_data(0x80)
-
-        self.send_command(0x4E)
+        self.send_command(0x4E)  # set RAM x address counter to 0
         self.send_data(0x00)
 
-        self.send_command(0x4F)
+        self.send_command(0x4F)  # set RAM y address counter to 0
         self.send_data(0x00)
         self.send_data(0x00)
 
         self.wait_busy()
 
     def render_screen(self, event_name, event_time, event_countdown, notif_app, notif_text):
-        src_stride = (self.width + 7) // 8
-        src_buf = bytearray(b'\xff' * (src_stride * self.height))
-        display = DisplayBuffer(src_buf, self.width, self.height)
+        buf = bytearray(b'\xff' * self.buf_size)
+        display = DisplayBuffer(buf, self.width, self.height)
 
         # -- Calendar section --
         wri_big = writer.Writer(display, self.font_large, verbose=False)
@@ -73,15 +87,15 @@ class SSD1680(BaseDisplay):
         time_line = event_time
         if event_countdown:
             time_line = event_time + "  " + event_countdown
-        writer.Writer.set_textpos(display, 32, 4)
+        writer.Writer.set_textpos(display, 50, 4)
         wri_sm.printstring(self.truncate(time_line, 23), invert=True)
 
         # -- Divider line --
         y_div = 56
         for x in range(4, self.width - 4):
-            byte_idx = (y_div * src_stride) + (x // 8)
+            byte_idx = (y_div * self.bytes_per_row) + (x // 8)
             bit_idx = 7 - (x % 8)
-            src_buf[byte_idx] &= ~(1 << bit_idx)
+            buf[byte_idx] &= ~(1 << bit_idx)
 
         # -- Notification section --
         if notif_app:
@@ -92,47 +106,18 @@ class SSD1680(BaseDisplay):
             writer.Writer.set_textpos(display, y_div + 34, 4)
             wri_sm.printstring(self.truncate(notif_text, 23), invert=True)
 
-        # -- Rotate if needed, then send to display --
-        if self.rotate:
-            dst_buf = self._rotate_cw(src_buf, self.width, self.height)
-            self.update_display(dst_buf)
-        else:
-            self.update_display(src_buf)
+        self.update_display(buf)
 
     def print_word(self, word):
-        src_stride = (self.width + 7) // 8
-        src_buf = bytearray(b'\xff' * (src_stride * self.height))
-        display = DisplayBuffer(src_buf, self.width, self.height)
+        buf = bytearray(b'\xff' * self.buf_size)
+        display = DisplayBuffer(buf, self.width, self.height)
 
         wri = writer.Writer(display, self.font_large, verbose=False)
         writer.Writer.set_textpos(display, 10, 10)
         wri.printstring(word, invert=True)
 
-        if self.rotate:
-            buf = self._rotate_cw(src_buf, self.width, self.height)
-        else:
-            buf = src_buf
-
         self.init()
+        self.write_previous_image(buf)
         self.write_image(buf)
         self.refresh()
         print("done")
-
-    def _rotate_cw(self, src_buf, src_width, src_height):
-        src_stride = (src_width + 7) // 8
-        dst_stride = (src_height + 7) // 8
-        dst_buf = bytearray(b'\xff' * (src_width * dst_stride))
-
-        for y in range(src_height):
-            for x in range(src_width):
-                src_byte = (y * src_stride) + (x // 8)
-                src_bit = 7 - (x % 8)
-                pixel = (src_buf[src_byte] >> src_bit) & 1
-                dst_x = src_height - 1 - y
-                dst_y = x
-                dst_byte = (dst_y * dst_stride) + (dst_x // 8)
-                dst_bit = 7 - (dst_x % 8)
-                if pixel == 0:
-                    dst_buf[dst_byte] &= ~(1 << dst_bit)
-
-        return dst_buf
