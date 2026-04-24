@@ -38,6 +38,10 @@ class SSD1683(BaseDisplay):
         self.send_data(0x04)
         self.send_data(0x63)
 
+        self.send_command(0x21)   # Display update control 1
+        self.send_data(0x40)      # Red RAM: bypass as 0
+        self.send_data(0x00)      # BW RAM: normal
+
         self.send_command(0x01)  # driver output control
         self.send_data((self.height - 1) & 0xFF)
         self.send_data((self.height - 1) >> 8)

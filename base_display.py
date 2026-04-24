@@ -102,8 +102,13 @@ class BaseDisplay:
         self.cs.value(1)
 
     def wait_busy(self):
+        print(self.busy.value())
+        print(time.ticks_ms())
+        print("Busy")
         while self.busy.value() == 1:
             time.sleep_ms(10)
+        print("Not busy")
+        print(time.ticks_ms())
 
     def reset(self):
         self.rst.value(1)
@@ -149,19 +154,13 @@ class BaseDisplay:
 
         self.write_image(dst_buf)
 
-        if self._prev_buf:
-            self.write_previous_image(self._prev_buf)
-        else:
-            self.write_previous_image(dst_buf)
+        # 0x26 / write_previous_image removed — SSD1683's 0x26 is red channel RAM,
+        # not previous-image RAM. On a B/W panel, red RAM is explicitly bypassed
+        # by Display Update Control 1 (0x21 = 0x40 0x00) set during init.
 
-        if True or self._prev_buf is None or self._partial_count >= 5:
-            self._partial_count = 0
-            self.refresh()
-        else:
-            self._partial_count += 1
-            self.refresh_partial()
+        self.refresh()
 
-        self._prev_buf = bytearray(dst_buf)
+        self._prev_buf = bytearray(dst_buf)  # still track for future diff/partial use
 
     def _rotate_cw(self, src_buf, src_width, src_height):
         src_stride = (src_width + 7) // 8
